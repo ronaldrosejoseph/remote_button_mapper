@@ -30,6 +30,7 @@ captures/
 # Keystore files
 *.jks
 *.keystore
+keystore.properties
 
 # OS generated files
 .DS_Store

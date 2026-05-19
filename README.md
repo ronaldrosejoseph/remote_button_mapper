@@ -1,6 +1,6 @@
 # Remote Button Mapper
 
-Remap any button on your Android TV remote to launch a specific app. For example, remap the Netflix button to open YouTube, or the Prime Video button to open Plex.
+Remap app-specific buttons on your Android TV remote to launch a different app. For example, remap the Netflix button to open YouTube, or the Prime Video button to open Plex.
 
 The app runs as an accessibility service in the background, intercepting hardware key events and launching your chosen apps instantly.
 
@@ -8,7 +8,7 @@ The app runs as an accessibility service in the background, intercepting hardwar
 
 ## Features
 
-- **Button remapping** — Map any remote button to any installed app
+- **Button remapping** — Map app-specific buttons (e.g., Netflix, Prime Video) to any installed app
 - **Foreground service** — Runs persistently without being killed by the OS
 - **Direct boot aware** — Mappings survive encrypted reboots
 - **Debounced key presses** — Prevents accidental double-launches from held or bounced buttons
