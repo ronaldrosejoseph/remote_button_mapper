@@ -2,9 +2,25 @@ plugins {
     id 'com.android.application'
 }
 
+// Load keystore properties (never committed to git)
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace 'com.example.remotebuttonmapper'
     compileSdk 34
+
+    signingConfigs {
+        release {
+            storeFile keystoreProperties['KEYSTORE_FILE'] ? rootProject.file(keystoreProperties['KEYSTORE_FILE']) : null
+            storePassword keystoreProperties['KEYSTORE_PASSWORD']
+            keyAlias keystoreProperties['KEY_ALIAS']
+            keyPassword keystoreProperties['KEY_PASSWORD']
+        }
+    }
 
     defaultConfig {
         applicationId "com.example.remotebuttonmapper"
@@ -19,6 +35,7 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
     compileOptions {

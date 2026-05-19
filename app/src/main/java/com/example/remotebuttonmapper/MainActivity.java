@@ -1,68 +1,56 @@
 package com.example.remotebuttonmapper;
 
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.annotation.SuppressLint;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.Log;
-import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityManager;
-import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final String PREFS_NAME = "ButtonMappings";
     private ListView listMappings;
-    private MappingAdapter mappingAdapter;
     private SharedPreferences prefs;
 
+    @SuppressLint("BatteryLife")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
         if (!isAccessibilityServiceEnabled()) {
-            // Try to self-enable the accessibility service (requires WRITE_SECURE_SETTINGS granted via ADB)
             if (!tryEnableAccessibilityService()) {
-                Toast.makeText(this, "Please enable the Accessibility Service", Toast.LENGTH_LONG).show();
-                try {
-                    Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
-                    startActivity(intent);
-                } catch (android.content.ActivityNotFoundException e) {
-                    try {
-                        Intent intent = new Intent(Settings.ACTION_SETTINGS);
-                        startActivity(intent);
-                    } catch (Exception ex) {
-                        Toast.makeText(this, "Could not open Settings. Please open manually.", Toast.LENGTH_LONG).show();
-                    }
-                }
+                Toast.makeText(this, R.string.please_enable_accessibility, Toast.LENGTH_LONG).show();
             } else {
-                Toast.makeText(this, "Accessibility Service enabled automatically!", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, R.string.accessibility_enabled_auto, Toast.LENGTH_SHORT).show();
             }
         }
 
@@ -75,38 +63,38 @@ public class MainActivity extends AppCompatActivity {
 
         btnAdd.setOnClickListener(v -> showAddMappingDialog());
 
+        // Accessibility warning banner
+        LinearLayout bannerWarning = findViewById(R.id.banner_warning);
+        checkAccessibilityBanner(bannerWarning);
+
         refreshMappings();
 
         // Request ignore battery optimizations to prevent service kill
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            String packageName = getPackageName();
-            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
-            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-                Intent intent = new Intent();
-                intent.setAction(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-                intent.setData(android.net.Uri.parse("package:" + packageName));
-                startActivity(intent);
-            }
+        String packageName = getPackageName();
+        android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+        if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
+            Intent intent = new Intent();
+            intent.setAction(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            intent.setData(android.net.Uri.parse("package:" + packageName));
+            startActivity(intent);
         }
 
         // Request "Display over other apps" — required on Android 10+ for boot auto-launch
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            if (!Settings.canDrawOverlays(this)) {
-                Toast.makeText(this,
-                        "Please enable 'Display over other apps' for auto-start on boot",
-                        Toast.LENGTH_LONG).show();
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this,
+                    R.string.enable_overlay_toast,
+                    Toast.LENGTH_LONG).show();
+            try {
+                Intent overlayIntent = new Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        android.net.Uri.parse("package:" + getPackageName()));
+                startActivity(overlayIntent);
+            } catch (android.content.ActivityNotFoundException e) {
+                // Some TVs don't have the per-app overlay settings page
                 try {
-                    Intent overlayIntent = new Intent(
-                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                            android.net.Uri.parse("package:" + getPackageName()));
-                    startActivity(overlayIntent);
-                } catch (android.content.ActivityNotFoundException e) {
-                    // Some TVs don't have the per-app overlay settings page
-                    try {
-                        startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION));
-                    } catch (Exception ex) {
-                        Log.w("MainActivity", "Could not open overlay settings", ex);
-                    }
+                    startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION));
+                } catch (Exception ex) {
+                    Log.w("MainActivity", "Could not open overlay settings", ex);
                 }
             }
         }
@@ -130,19 +118,21 @@ public class MainActivity extends AppCompatActivity {
     protected void onResume() {
         super.onResume();
         refreshMappings();
+        LinearLayout bannerWarning = findViewById(R.id.banner_warning);
+        checkAccessibilityBanner(bannerWarning);
     }
 
     private void showOptionsDialog(MappingItem item) {
-        String[] options = {"Modify", "Delete"};
+        String[] options = {getString(R.string.modify), getString(R.string.delete)};
 
-        new android.app.AlertDialog.Builder(this)
-            .setTitle("Options for Key " + item.keyCode)
+        new AlertDialog.Builder(this)
+            .setTitle(getString(R.string.options_title, item.keyCode))
             .setItems(options, (dialog, which) -> {
                 if (which == 0) { // Modify
                     showSelectAppDialog(item.keyCode);
                 } else if (which == 1) { // Delete
                     prefs.edit().remove(item.keyCode).apply();
-                    Toast.makeText(MainActivity.this, "Key " + item.keyCode + " mapping deleted", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(MainActivity.this, getString(R.string.mapping_deleted, item.keyCode), Toast.LENGTH_SHORT).show();
                     refreshMappings();
                 }
             })
@@ -150,13 +140,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showSelectAppDialog(String keyCode) {
-        Dialog dialog = new Dialog(this);
-        dialog.setContentView(R.layout.dialog_add_mapping); // Reusing layout, but will hide "Pressed Key" part or just use list
-        // Actually, reusing logic is complex because of key capture. 
-        // Let's just create a simple list dialog for selecting app.
-        
-        android.app.AlertDialog.Builder builder = new android.app.AlertDialog.Builder(this);
-        builder.setTitle("Select App for Key " + keyCode);
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle(getString(R.string.options_title, keyCode)); // Reusing options_title or similar
 
         List<AppItem> appItems = getInstalledApps();
         ArrayAdapter<AppItem> appAdapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, appItems);
@@ -165,9 +150,9 @@ public class MainActivity extends AppCompatActivity {
              AppItem selectedApp = appItems.get(which);
              prefs.edit().putString(keyCode, selectedApp.packageName).apply();
              refreshMappings();
-             Toast.makeText(this, "Updated mapping for Key " + keyCode, Toast.LENGTH_SHORT).show();
+             Toast.makeText(this, getString(R.string.mapping_updated, keyCode), Toast.LENGTH_SHORT).show();
         });
-        builder.setNegativeButton("Cancel", null);
+        builder.setNegativeButton(R.string.cancel, null);
         builder.show();
     }
 
@@ -180,6 +165,14 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         return false;
+    }
+
+    private void checkAccessibilityBanner(LinearLayout banner) {
+        if (isAccessibilityServiceEnabled()) {
+            banner.setVisibility(View.GONE);
+        } else {
+            banner.setVisibility(View.VISIBLE);
+        }
     }
 
     private boolean tryEnableAccessibilityService() {
@@ -249,7 +242,7 @@ public class MainActivity extends AppCompatActivity {
         }
         StringBuilder result = new StringBuilder();
         for (String service : serviceList.split(":")) {
-            if (!service.equals(component)) {
+            if (!Objects.equals(service, component)) {
                 if (result.length() > 0) {
                     result.append(":");
                 }
@@ -262,13 +255,9 @@ public class MainActivity extends AppCompatActivity {
     private void refreshMappings() {
         Map<String, ?> allEntries = prefs.getAll();
         List<MappingItem> items = new ArrayList<>();
-        for (Map.Entry<String, ?> entry : allEntries.entrySet()) {
-            String key = entry.getKey();
-            Object value = entry.getValue();
-
+        allEntries.forEach((key, value) -> {
             // Validate: key must be a numeric keycode, value must be a valid package name
-            if (value instanceof String) {
-                String pkg = (String) value;
+            if (value instanceof String pkg) {
                 if (key.matches("^\\d+$") &&
                     pkg.matches("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$")) {
                     items.add(new MappingItem(key, pkg));
@@ -276,8 +265,8 @@ public class MainActivity extends AppCompatActivity {
                     Log.w("MainActivity", "Skipping malformed mapping: " + key + " -> " + pkg);
                 }
             }
-        }
-        mappingAdapter = new MappingAdapter(items);
+        });
+        MappingAdapter mappingAdapter = new MappingAdapter(items);
         listMappings.setAdapter(mappingAdapter);
     }
 
@@ -291,14 +280,15 @@ public class MainActivity extends AppCompatActivity {
         for (ResolveInfo info : apps) {
              appItems.add(new AppItem(info.loadLabel(pm).toString(), info.activityInfo.packageName));
         }
-        Collections.sort(appItems, (o1, o2) -> o1.name.compareToIgnoreCase(o2.name));
+        appItems.sort((o1, o2) -> o1.name.compareToIgnoreCase(o2.name));
         return appItems;
     }
 
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private void showAddMappingDialog() {
         Dialog dialog = new Dialog(this);
         dialog.setContentView(R.layout.dialog_add_mapping);
-        dialog.getWindow().setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
+        Objects.requireNonNull(dialog.getWindow()).setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
 
         TextView textPressedKey = dialog.findViewById(R.id.text_pressed_key);
         ListView listApps = dialog.findViewById(R.id.list_apps);
@@ -318,11 +308,17 @@ public class MainActivity extends AppCompatActivity {
                 if ("com.example.remotebuttonmapper.ACTION_KEY_CAPTURED".equals(intent.getAction())) {
                     int keyCode = intent.getIntExtra("keyCode", -1);
                     capturedKeyCode[0] = keyCode;
-                    textPressedKey.setText("Key: " + keyCode);
+                    textPressedKey.setText(getString(R.string.key_format, String.valueOf(keyCode)));
                 }
             }
         };
-        registerReceiver(keyReceiver, new android.content.IntentFilter("com.example.remotebuttonmapper.ACTION_KEY_CAPTURED"), android.content.Context.RECEIVER_NOT_EXPORTED);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(keyReceiver, new android.content.IntentFilter("com.example.remotebuttonmapper.ACTION_KEY_CAPTURED"), null, null, Context.RECEIVER_NOT_EXPORTED);
+        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            registerReceiver(keyReceiver, new android.content.IntentFilter("com.example.remotebuttonmapper.ACTION_KEY_CAPTURED"), null, null, 0);
+        } else {
+            registerReceiver(keyReceiver, new android.content.IntentFilter("com.example.remotebuttonmapper.ACTION_KEY_CAPTURED"));
+        }
 
         // Load Apps
         List<AppItem> appItems = getInstalledApps();
@@ -336,7 +332,7 @@ public class MainActivity extends AppCompatActivity {
                 refreshMappings();
                 dialog.dismiss();
             } else {
-                Toast.makeText(this, "Please press a button on the remote first", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, R.string.press_remote_first, Toast.LENGTH_SHORT).show();
             }
         });
 
@@ -368,7 +364,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private class MappingAdapter extends BaseAdapter {
-        private List<MappingItem> items;
+        private final List<MappingItem> items;
 
         MappingAdapter(List<MappingItem> items) {
             this.items = items;
@@ -383,18 +379,18 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public View getView(int position, View convertView, ViewGroup parent) {
-            if (convertView == null) {
-                convertView = LayoutInflater.from(MainActivity.this).inflate(R.layout.item_mapping, parent, false);
-            }
+            View itemView = (convertView != null) ? convertView :
+                    LayoutInflater.from(MainActivity.this).inflate(R.layout.item_mapping, parent, false);
+
             MappingItem item = items.get(position);
             
-            TextView textKey = convertView.findViewById(R.id.text_key_code);
-            TextView textPkg = convertView.findViewById(R.id.text_package_name);
+            TextView textKey = itemView.findViewById(R.id.text_key_code);
+            TextView textPkg = itemView.findViewById(R.id.text_package_name);
 
-            textKey.setText("Key: " + item.keyCode);
+            textKey.setText(getString(R.string.key_format, item.keyCode));
             textPkg.setText(item.packageName);
 
-            return convertView;
+            return itemView;
         }
     }
 
@@ -407,6 +403,7 @@ public class MainActivity extends AppCompatActivity {
             this.packageName = packageName;
         }
         
+        @NonNull
         @Override
         public String toString() {
             return name;

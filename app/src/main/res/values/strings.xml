@@ -7,4 +7,16 @@
     <string name="press_button_message">Press the button on your remote to map</string>
     <string name="select_app_title">Select App</string>
     <string name="cancel">Cancel</string>
+    <string name="please_enable_accessibility">Please enable the Accessibility Service</string>
+    <string name="accessibility_enabled_auto">Accessibility Service enabled automatically!</string>
+    <string name="enable_overlay_toast">Please enable \'Display over other apps\' for auto-start on boot</string>
+    <string name="options_title">Options for Key %1$s</string>
+    <string name="modify">Modify</string>
+    <string name="delete">Delete</string>
+    <string name="key_format">Key: %1$s</string>
+    <string name="mapping_deleted">Key %1$s mapping deleted</string>
+    <string name="mapping_updated">Updated mapping for Key %1$s</string>
+    <string name="press_remote_first">Please press a button on the remote first</string>
+    <string name="banner_title">&#9888; Accessibility Service Not Enabled</string>
+    <string name="banner_body">Open Settings → Accessibility → find \'Remote Button Mapper\' and enable it. If it is already enabled, turn it off and back on — this is needed after a TV reboot.</string>
 </resources>

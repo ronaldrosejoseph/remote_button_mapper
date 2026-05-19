@@ -9,10 +9,10 @@ The app runs as an accessibility service in the background, intercepting hardwar
 ## Features
 
 - **Button remapping** — Map any remote button to any installed app
-- **Auto-start on boot** — The service starts automatically when the TV powers on
 - **Foreground service** — Runs persistently without being killed by the OS
 - **Direct boot aware** — Mappings survive encrypted reboots
 - **Debounced key presses** — Prevents accidental double-launches from held or bounced buttons
+- **Auto-start on boot** — The service re-enables itself after a reboot *(requires advanced setup — see below)*
 
 ---
 
@@ -20,74 +20,27 @@ The app runs as an accessibility service in the background, intercepting hardwar
 
 ### 1. Install the APK
 
-Sideload the APK via ADB:
+1. **Download the APK** from the [Releases page](https://github.com/ronaldrosejoseph/remote_button_mapper/releases) — grab the latest APK from the attachments
+2. Transfer it to your TV using one of these methods:
+   - **Send Files to TV** app (available on Play Store for both phone and TV)
+   - **USB drive** — copy the APK to a USB drive and plug it into your TV
+   - **Cloud storage** — upload to Google Drive, then download on your TV using a file manager
+3. Open the APK file on your TV using a file manager to install it
 
-```bash
-adb install remote-button-mapper.apk
-```
+### 2. Enable the Accessibility Service
 
-### 2. Enable Developer Options on Android TV
+This is **required** — the app cannot intercept button presses without it.
 
-> **Note:** These steps may vary slightly depending on your TV manufacturer (TCL, Sony, Xiaomi, etc.).
-
-1. Open **Settings** on your Android TV
-2. Scroll down to **Device Preferences** (or **System** on some TVs)
-3. Select **About**
-4. Find **Build** (or **Build number**) and **press OK on it 7 times** rapidly
-5. You should see a toast message: *"You are now a developer!"*
-6. Go back — **Developer options** will now appear under **Device Preferences** or **System**
-
-### 3. Enable USB Debugging (required for ADB)
-
-1. Go to **Settings → Device Preferences → Developer options**
-2. Enable **USB debugging**
-3. Connect your TV to your computer via USB or ensure both are on the same network
-4. For wireless ADB: `adb connect <TV_IP_ADDRESS>:5555`
-
----
-
-## Granting Permissions via ADB
-
-The app requires two special permissions that can only be granted via ADB. These enable the service to **auto-enable itself on boot** without manual intervention.
-
-### Grant WRITE_SECURE_SETTINGS (auto-enable accessibility service)
-
-This allows the app to programmatically toggle its own accessibility service on/off, which is essential for auto-recovery after a reboot.
-
-```bash
-adb shell pm grant com.example.remotebuttonmapper android.permission.WRITE_SECURE_SETTINGS
-```
-
-### Exempt from battery optimization
-
-Prevents the OS from killing the service to save power:
-
-```bash
-adb shell dumpsys deviceidle whitelist +com.example.remotebuttonmapper
-```
-
-### Grant overlay permission (auto-launch on boot)
-
-Required on Android 10+ for the boot receiver to launch the activity:
-
-```bash
-adb shell appops set com.example.remotebuttonmapper SYSTEM_ALERT_WINDOW allow
-```
-
----
-
-## Enabling the Accessibility Service
-
-The app will try to auto-enable itself on first launch if `WRITE_SECURE_SETTINGS` has been granted. If it cannot, you'll need to enable it manually:
-
-1. Go to **Settings → Accessibility** (or **Settings → System → Accessibility**)
-2. Find **Remote Button Mapper** in the list
-3. Toggle it **ON**
-4. Confirm any permission dialogs
+1. Open the **Remote Button Mapper** app on your TV
+2. If the accessibility settings don't open automatically, go to **Settings → Accessibility** (or **Settings → System → Accessibility**)
+3. Find **Remote Button Mapper** in the list
+4. Toggle it **ON** and confirm any permission dialogs
 
 Once enabled, you'll see a persistent notification confirming *"Button mapping is active"*.
 
-> **After a reboot**, the app automatically re-enables the accessibility service if `WRITE_SECURE_SETTINGS` was granted — no manual steps needed.
+### 3. Allow Display Over Other Apps
+
+When you first open the app, a popup will ask you to **"Allow display over other apps"** — tap **Allow**. This permission prevents the TV from automatically stopping the app in the background.
 
 ---
 
@@ -118,6 +71,66 @@ The following keys are always passed through to the system and cannot be remappe
 | Menu, Settings | System access |
 | Volume Up/Down/Mute | Media control |
 | Power, Sleep, Wakeup | Power management |
+
+### After a TV Restart
+
+**You need to open the app first after every power reboot.** Going directly to Settings and toggling the accessibility service won't work — the app must be launched at least once so it can bind to the system. Open the Remote Button Mapper app and it will warn you if the service is not running, then guide you to re-enable it.
+
+**Some TV operating systems may also put the app to sleep** in the background. If mappings suddenly stop working mid-use, the OS likely suspended the service. Simply open the app again to restore functionality.
+
+**To fix both issues permanently**, follow the advanced setup steps below. They will:
+- Re-enable the accessibility service automatically after every reboot
+- Launch the app on startup
+- Prevent the OS from ever putting the app to sleep
+
+These steps require connecting your TV to a computer — some technical comfort is needed.
+
+---
+
+## Set Up Auto-Start After Reboot (Optional)
+
+Without this, you'll need to manually re-enable the accessibility service each time the TV restarts. These steps make it automatic — the app will recover on its own after a reboot.
+
+> **Already have ADB?** You can install the APK directly:
+> ```bash
+> adb install remote-button-mapper.apk
+> ```
+
+### Prerequisite: Enable USB Debugging
+
+To run ADB commands, you first need USB debugging enabled on your TV.
+
+1. Enable Developer Options: go to **Settings → Device Preferences → About**, find **Build** and press OK on it 7 times
+2. Go to **Settings → Device Preferences → Developer options**
+3. Enable **USB debugging**
+4. Connect your TV to your computer via USB, or connect wirelessly:
+   ```bash
+   adb connect <TV_IP_ADDRESS>:5555
+   ```
+
+### Grant WRITE_SECURE_SETTINGS
+
+Allows the app to programmatically enable its own accessibility service after a reboot.
+
+```bash
+adb shell pm grant com.example.remotebuttonmapper android.permission.WRITE_SECURE_SETTINGS
+```
+
+### Exempt from Battery Optimization
+
+Prevents the OS from killing the service to save power.
+
+```bash
+adb shell dumpsys deviceidle whitelist +com.example.remotebuttonmapper
+```
+
+### Grant Overlay Permission
+
+Required on Android 10+ for the app to auto-launch on boot.
+
+```bash
+adb shell appops set com.example.remotebuttonmapper SYSTEM_ALERT_WINDOW allow
+```
 
 ---
 
@@ -159,7 +172,7 @@ Look for:
 ## Building from Source
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/ronaldrosejoseph/remote_button_mapper
 cd remote_button_mapper
 ./gradlew assembleDebug
 ```
