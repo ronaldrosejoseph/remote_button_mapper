@@ -11,7 +11,6 @@ The app runs as an accessibility service in the background, intercepting hardwar
 - **Button remapping** — Map app-specific buttons (e.g., Netflix, Prime Video) to any installed app
 - **Foreground service** — Runs persistently without being killed by the OS
 - **Direct boot aware** — Mappings survive encrypted reboots
-- **Debounced key presses** — Prevents accidental double-launches from held or bounced buttons
 - **Auto-start on boot** — The service re-enables itself after a reboot *(requires advanced setup — see below)*
 
 ---
@@ -164,7 +163,6 @@ adb logcat -s ButtonMapperService:D BootReceiver:D MainActivity:D
 
 Look for:
 - `"Mapping found for key X"` — successful remap
-- `"Debounced key X (too soon)"` — rapid press was correctly filtered
 - `"Service Connected"` — service is alive and bound
 
 ---
@@ -191,7 +189,7 @@ Install directly via:
 
 | Component | Purpose |
 |-----------|---------|
-| `ButtonMapperService` | Accessibility service that intercepts key events, looks up mappings from an in-memory cache, debounces presses, and launches target apps |
+| `ButtonMapperService` | Accessibility service that intercepts key events, checks mappings, and launches target apps. System keys pass through immediately. No debounce or special handling |
 | `MainActivity` | UI for adding/modifying/deleting button mappings, stored in device-protected SharedPreferences |
 | `BootReceiver` | Listens for boot-completed broadcasts and sets a flag for service recovery |
 

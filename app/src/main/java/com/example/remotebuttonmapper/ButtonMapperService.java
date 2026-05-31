@@ -31,65 +31,11 @@ public class ButtonMapperService extends AccessibilityService {
     private static final String CHANNEL_ID = "button_mapper_service";
     private static final int NOTIFICATION_ID = 1;
 
-    /** Per-key debounce for mapped-key app launches (elapsedRealtime). */
-    private static final long DEBOUNCE_MS = 500;
-
-    /** Per-key debounce for system/navigation keys — tight so fast navigation
-     *  feels responsive.  Lag-burst protection is handled by the burst detector. */
-    private static final long SYSTEM_KEY_DEBOUNCE_MS = 150;
-
-    /** Per-key debounce for volume keys. */
-    private static final long VOLUME_KEY_DEBOUNCE_MS = 200;
-
-    /** Events for the same keycode within this eventTime window are hardware duplicates. */
-    private static final long EVENT_TIME_DEDUP_MS = 80;
-
-    // ── System-key burst detection ───────────────────────────────────────
-    /** Two system-key DOWN events delivered this close together with a stale
-     *  event time indicate a lag-induced burst.  Human presses never arrive
-     *  this fast (normal inter-event gap is 100ms+). */
-    private static final long SYSTEM_BURST_GAP_MS = 40;
-    /** Delivery delay beyond which an event is considered "stale" (queued during lag). */
-    private static final long SYSTEM_STALE_MS = 200;
-    /** How long to block system keys after a burst is detected. */
-    private static final long SYSTEM_BURST_COOLDOWN_MS = 400;
-
-    // ── Mapped-key completion gating ─────────────────────────────────────
-    /** After launchApp, wait this long for the target window to appear before
-     *  timing out and allowing the next launch. */
-    private static final long LAUNCH_COMPLETION_TIMEOUT_MS = 3000;
-
     private SharedPreferences mStatePrefs;
     private SharedPreferences mMappingsPrefs;
-
-    /** Cached recording state — volatile so onKeyEvent sees changes from the UI thread instantly. */
     private volatile boolean mIsRecording = false;
-
-    /** In-memory cache: keyCode (int) → packageName. Avoids disk I/O on every key event. */
     private final HashMap<Integer, String> mMappingsCache = new HashMap<>();
 
-    /** Per-keycode timestamp of the last successful launch (elapsedRealtime), for debouncing. */
-    private final HashMap<Integer, Long> mLastLaunchTime = new HashMap<>();
-
-    /** Per-keycode timestamp of the last processed system key event (elapsedRealtime). */
-    private final HashMap<Integer, Long> mLastSystemKeyTime = new HashMap<>();
-
-    /** Per-keycode eventTime of the last processed event, for hardware-level dedup. */
-    private final HashMap<Integer, Long> mLastEventDownTime = new HashMap<>();
-
-    // ── System-key burst detection state ─────────────────────────────────
-    /** elapsedRealtime of the last system-key DOWN event (any keycode). */
-    private long mLastSystemKeyDeliveryTime;
-    /** Block system keys until this elapsedRealtime after a burst. */
-    private long mSystemBurstCooldownUntil;
-
-    // ── Mapped-key completion gating ─────────────────────────────────────
-    /** True while waiting for the launched app's window to appear. */
-    private boolean mPendingLaunch;
-    /** elapsedRealtime of the last launch, for the completion timeout. */
-    private long mLastLaunchAnyKeyTime;
-
-    /** Keeps mMappingsCache in sync when the UI adds/removes mappings. */
     private final SharedPreferences.OnSharedPreferenceChangeListener mMappingsListener =
             (prefs, key) -> {
                 if (key == null) return;
@@ -102,11 +48,9 @@ public class ButtonMapperService extends AccessibilityService {
                         mMappingsCache.remove(keyCode);
                     }
                 } catch (NumberFormatException ignored) {
-                    // Non-numeric keys are not button mappings — skip
                 }
             };
 
-    /** Keeps mIsRecording in sync — eliminates SharedPreferences read from the key-event hot path. */
     private final SharedPreferences.OnSharedPreferenceChangeListener mStateListener =
             (prefs, key) -> {
                 if ("is_recording".equals(key)) {
@@ -116,19 +60,10 @@ public class ButtonMapperService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        // Completion gate: when a launched app's window appears, allow the next launch.
-        if (mPendingLaunch
-            && event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            CharSequence pkg = event.getPackageName();
-            if (pkg != null && !pkg.equals(getPackageName())) {
-                mPendingLaunch = false;
-            }
-        }
     }
 
     @Override
     public void onInterrupt() {
-        // Not used
     }
 
     @Override
@@ -140,19 +75,14 @@ public class ButtonMapperService extends AccessibilityService {
         mStatePrefs = directBootContext.getSharedPreferences("ServiceState", MODE_PRIVATE);
         mMappingsPrefs = directBootContext.getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
 
-        // Seed cached recording state
         mIsRecording = mStatePrefs.getBoolean("is_recording", false);
-
-        // Populate in-memory cache from current mappings
         loadMappingsCache();
 
-        // Listen for future changes so caches stay current
         mMappingsPrefs.registerOnSharedPreferenceChangeListener(mMappingsListener);
         mStatePrefs.registerOnSharedPreferenceChangeListener(mStateListener);
 
         startForegroundNotification();
 
-        // Show status toast so user knows the service is running
         try {
             Toast.makeText(this, "✓ Remote Button Mapper is active", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
@@ -162,18 +92,16 @@ public class ButtonMapperService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
-        // Unregister listener to avoid leaks
         if (mMappingsPrefs != null) {
             mMappingsPrefs.unregisterOnSharedPreferenceChangeListener(mMappingsListener);
         }
         if (mStatePrefs != null) {
             mStatePrefs.unregisterOnSharedPreferenceChangeListener(mStateListener);
         }
-        Log.w(TAG, "Service destroyed — this should not happen normally.");
+        Log.w(TAG, "Service destroyed.");
         super.onDestroy();
     }
 
-    /** Load all mappings from SharedPreferences into the in-memory HashMap. */
     private void loadMappingsCache() {
         mMappingsCache.clear();
         Map<String, ?> all = mMappingsPrefs.getAll();
@@ -184,7 +112,6 @@ public class ButtonMapperService extends AccessibilityService {
                     mMappingsCache.put(keyCode, pkg);
                 }
             } catch (NumberFormatException ignored) {
-                // Skip non-numeric keys
             }
         });
         Log.d(TAG, "Loaded " + mMappingsCache.size() + " mappings into cache");
@@ -214,7 +141,7 @@ public class ButtonMapperService extends AccessibilityService {
             } else {
                 startForeground(NOTIFICATION_ID, notification);
             }
-            Log.i(TAG, "Foreground notification started — service is now persistent.");
+            Log.i(TAG, "Foreground notification started.");
         } catch (Exception e) {
             Log.e(TAG, "Failed to start foreground notification", e);
         }
@@ -225,7 +152,7 @@ public class ButtonMapperService extends AccessibilityService {
             NotificationChannel channel = new NotificationChannel(
                     CHANNEL_ID,
                     "Button Mapper Service",
-                    NotificationManager.IMPORTANCE_LOW); // Low = no sound, shows in tray
+                    NotificationManager.IMPORTANCE_LOW);
             channel.setDescription("Keeps the button mapper running in the background");
             channel.setShowBadge(false);
 
@@ -240,56 +167,22 @@ public class ButtonMapperService extends AccessibilityService {
     protected boolean onKeyEvent(KeyEvent event) {
         int keyCode = event.getKeyCode();
 
-        // 1. Always pass through Navigation/System keys — zero overhead path
-        if (isSystemKey(keyCode)) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                long now = SystemClock.elapsedRealtime();
-                long eventTime = event.getEventTime();
-
-                // Burst cooldown — after a lag burst is detected, block all
-                // system keys for a beat so queued events don't flood through.
-                if (now < mSystemBurstCooldownUntil) {
-                    return true;
-                }
-
-                // Event-time dedup: hardware-level duplicates
-                Long lastEventTime = mLastEventDownTime.get(keyCode);
-                if (lastEventTime != null && Math.abs(eventTime - lastEventTime) < EVENT_TIME_DEDUP_MS) {
-                    return true;
-                }
-
-                // Per-key debounce — tight (150ms) so fast navigation feels responsive
-                long debounceMs = isVolumeKey(keyCode) ? VOLUME_KEY_DEBOUNCE_MS : SYSTEM_KEY_DEBOUNCE_MS;
-                Long last = mLastSystemKeyTime.get(keyCode);
-                if (last != null && (now - last) < debounceMs) {
-                    return true;
-                }
-
-                // Burst detection: two system-key events arriving <40ms apart
-                // AND the current event is stale (>200ms delivery delay) →
-                // lag-induced burst.  Normal presses never trigger this because
-                // inter-event gaps are 100ms+ and delivery delay is ~5-50ms.
-                long gap = (mLastSystemKeyDeliveryTime != 0)
-                        ? (now - mLastSystemKeyDeliveryTime) : Long.MAX_VALUE;
-                boolean stale = (now - eventTime) > SYSTEM_STALE_MS;
-                if (gap < SYSTEM_BURST_GAP_MS && stale) {
-                    mSystemBurstCooldownUntil = now + SYSTEM_BURST_COOLDOWN_MS;
-                    Log.w(TAG, "System-key burst — cooldown " + SYSTEM_BURST_COOLDOWN_MS + "ms");
-                    return true;
-                }
-
-                if (mLastSystemKeyTime.size() > 50) {
-                    mLastSystemKeyTime.clear();
-                    mLastEventDownTime.clear();
-                }
-                mLastSystemKeyTime.put(keyCode, now);
-                mLastEventDownTime.put(keyCode, eventTime);
-                mLastSystemKeyDeliveryTime = now;
+        // Staleness check: if the event spent >300ms queued in the system
+        // during a lag spike (e.g. TV startup at 100% utilization), discard
+        // it.  Normal delivery delay is ~5-50ms.
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            long delay = SystemClock.uptimeMillis() - event.getEventTime();
+            if (delay > 300) {
+                return true;
             }
+        }
+
+        // 1. System/navigation keys — pass through immediately.
+        if (isSystemKey(keyCode)) {
             return false;
         }
 
-        // Re-initialize prefs only if null (service restart edge case)
+        // Re-initialize prefs if null (service restart edge case)
         if (mStatePrefs == null || mMappingsPrefs == null) {
             Context directBootContext = createDeviceProtectedStorageContext();
             mStatePrefs = directBootContext.getSharedPreferences("ServiceState", MODE_PRIVATE);
@@ -300,83 +193,34 @@ public class ButtonMapperService extends AccessibilityService {
             mStatePrefs.registerOnSharedPreferenceChangeListener(mStateListener);
         }
 
-        // 2. Recording Mode: consume BOTH Down and Up
+        // 2. Recording Mode
         if (mIsRecording) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                // Validate keycode is in a reasonable range (some custom remotes use 4000+)
                 if (keyCode < 0 || keyCode > 10000) {
-                    Log.w(TAG, "Ignoring out-of-range keyCode: " + keyCode);
                     return true;
                 }
-                Log.d(TAG, "Recording Key: " + keyCode);
-                // Broadcast key to UI only on DOWN — restricted to our app package only
                 Intent intent = new Intent("com.example.remotebuttonmapper.ACTION_KEY_CAPTURED");
                 intent.setPackage(getPackageName());
                 intent.putExtra("keyCode", keyCode);
                 sendBroadcast(intent);
             }
-            return true; // Consume ALL events for this key
-        }
-
-        // 3. Normal Mapping Mode: fast in-memory lookup instead of disk-backed getString()
-        String packageName = mMappingsCache.get(keyCode);
-
-        if (packageName != null) {
-            if (event.getAction() == KeyEvent.ACTION_DOWN) {
-                long now = SystemClock.elapsedRealtime();
-                long eventTime = event.getEventTime();
-
-                // ── Layer 1: event-time dedup (hardware duplicates) ────────
-                Long lastEventTime = mLastEventDownTime.get(keyCode);
-                if (lastEventTime != null && Math.abs(eventTime - lastEventTime) < EVENT_TIME_DEDUP_MS) {
-                    return true;
-                }
-
-                // ── Layer 2: per-key elapsed-time debounce ─────────────────
-                Long lastLaunch = mLastLaunchTime.get(keyCode);
-                if (lastLaunch != null && (now - lastLaunch) < DEBOUNCE_MS) {
-                    return true;
-                }
-
-                // ── Layer 3: completion gate ───────────────────────────────
-                // Wait for the previous launch's app window to actually appear
-                // before allowing the next launch.  This naturally absorbs
-                // lag bursts — the first queued event launches the app, and
-                // subsequent queued events are blocked until the window shows
-                // up (or the timeout expires).
-                if (mPendingLaunch) {
-                    if ((now - mLastLaunchAnyKeyTime) < LAUNCH_COMPLETION_TIMEOUT_MS) {
-                        return true;
-                    }
-                    mPendingLaunch = false; // timeout — allow this launch
-                }
-
-                // ── Record & launch ────────────────────────────────────────
-                if (mLastLaunchTime.size() > 50) {
-                    mLastLaunchTime.clear();
-                    mLastEventDownTime.clear();
-                }
-                mLastLaunchTime.put(keyCode, now);
-                mLastEventDownTime.put(keyCode, eventTime);
-                mLastLaunchAnyKeyTime = now;
-                mPendingLaunch = true;
-
-                launchApp(packageName);
-            }
-            // Consume both DOWN and UP to prevent system default
             return true;
         }
 
-        // Unmapped, non-system key — pass through immediately (avoid super dispatch overhead)
+        // 3. Normal Mapping Mode
+        String packageName = mMappingsCache.get(keyCode);
+        if (packageName != null) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                launchApp(packageName);
+            }
+            return true;
+        }
+
         return false;
     }
 
     private boolean isSystemKey(int keyCode) {
         return switch (keyCode) {
-            // D-pad navigation
-            // System navigation (some remotes/OS versions use these instead of DPAD)
-            // Core system keys
-            // Volume & power
             case KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT,
                  KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_CENTER,
                  KeyEvent.KEYCODE_DPAD_UP_LEFT, KeyEvent.KEYCODE_DPAD_UP_RIGHT,
@@ -392,12 +236,6 @@ public class ButtonMapperService extends AccessibilityService {
                  KeyEvent.KEYCODE_WAKEUP -> true;
             default -> false;
         };
-    }
-
-    private boolean isVolumeKey(int keyCode) {
-        return keyCode == KeyEvent.KEYCODE_VOLUME_UP
-            || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
-            || keyCode == KeyEvent.KEYCODE_VOLUME_MUTE;
     }
 
     private void launchApp(String packageName) {
