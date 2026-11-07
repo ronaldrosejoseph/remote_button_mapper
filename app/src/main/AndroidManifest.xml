@@ -8,9 +8,20 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <!-- TV-only apps like Prime Video expose only a leanback launcher -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+        </intent>
     </queries>
 
+    <permission
+        android:name="com.example.remotebuttonmapper.INTERNAL"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.example.remotebuttonmapper.INTERNAL" />
+
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
@@ -25,7 +36,7 @@
         android:allowBackup="false"
         android:icon="@drawable/ic_logo"
         android:banner="@drawable/ic_logo"
-        android:label="Remote Button Mapper"
+        android:label="@string/app_name"
         android:roundIcon="@drawable/ic_logo"
         android:supportsRtl="true"
         android:directBootAware="true"
@@ -62,16 +73,9 @@
         <receiver
             android:name=".BootReceiver"
             android:enabled="true"
-            android:directBootAware="true"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
-                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
-                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
-                <action android:name="android.intent.action.USER_PRESENT" />
-                <action android:name="android.intent.action.DREAMING_STOPPED" />
-                <action android:name="android.media.tv.action.INITIALIZE_PROGRAMS" />
             </intent-filter>
         </receiver>
 
