@@ -278,6 +278,10 @@ public class ButtonMapperService extends AccessibilityService {
     private void launchApp(String packageName) {
         PackageManager pm = getPackageManager();
         Intent launchIntent = pm.getLaunchIntentForPackage(packageName);
+        if (launchIntent == null) {
+            // TV-only apps such as Prime Video have no CATEGORY_LAUNCHER activity.
+            launchIntent = pm.getLeanbackLaunchIntentForPackage(packageName);
+        }
         if (launchIntent != null) {
             launchIntent.addFlags(
                     Intent.FLAG_ACTIVITY_NEW_TASK
