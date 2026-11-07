@@ -31,10 +31,20 @@ public class ButtonMapperService extends AccessibilityService {
     private static final String CHANNEL_ID = "button_mapper_service";
     private static final int NOTIFICATION_ID = 1;
 
+    // With key filtering on, every key waits for this service before reaching
+    // the app. On a loaded TV the pipeline backs up, then flushes, and the
+    // focused list jumps several steps at once. These values drain the flush.
+    private static final long STALE_MS = 300;
+    private static final long BURST_GAP_MS = 40;
+    private static final long BURST_STALE_MS = 200;
+    private static final long BURST_COOLDOWN_MS = 400;
+
     private SharedPreferences mStatePrefs;
     private SharedPreferences mMappingsPrefs;
     private volatile boolean mIsRecording = false;
     private final HashMap<Integer, String> mMappingsCache = new HashMap<>();
+    private long mLastSystemKeyDownTime;
+    private long mSystemBurstCooldownUntil;
 
     private final SharedPreferences.OnSharedPreferenceChangeListener mMappingsListener =
             (prefs, key) -> {
@@ -166,20 +176,19 @@ public class ButtonMapperService extends AccessibilityService {
     @Override
     protected boolean onKeyEvent(KeyEvent event) {
         int keyCode = event.getKeyCode();
+        boolean isDown = event.getAction() == KeyEvent.ACTION_DOWN;
+
+        // 1. System/navigation keys — pass through, but eat a lag burst so a
+        // queued flush does not jump the focus several steps at once.
+        if (isSystemKey(keyCode)) {
+            return isDown && shouldSwallowSystemKey(event);
+        }
 
         // Staleness check: if the event spent >300ms queued in the system
         // during a lag spike (e.g. TV startup at 100% utilization), discard
         // it.  Normal delivery delay is ~5-50ms.
-        if (event.getAction() == KeyEvent.ACTION_DOWN) {
-            long delay = SystemClock.uptimeMillis() - event.getEventTime();
-            if (delay > 300) {
-                return true;
-            }
-        }
-
-        // 1. System/navigation keys — pass through immediately.
-        if (isSystemKey(keyCode)) {
-            return false;
+        if (isDown && SystemClock.uptimeMillis() - event.getEventTime() > STALE_MS) {
+            return true;
         }
 
         // Re-initialize prefs if null (service restart edge case)
@@ -208,6 +217,7 @@ public class ButtonMapperService extends AccessibilityService {
         }
 
         // 3. Normal Mapping Mode
+        if (event.getRepeatCount() > 0) return true;
         String packageName = mMappingsCache.get(keyCode);
         if (packageName != null) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
@@ -217,6 +227,33 @@ public class ButtonMapperService extends AccessibilityService {
         }
 
         return false;
+    }
+
+    /**
+     * True when a system-key DOWN belongs to a queued lag burst and should be
+     * swallowed. A human cannot press two remote buttons within 40ms, so a
+     * tight delivery pair with an already-stale event time means the input
+     * pipeline is flushing its backlog. Eat system keys briefly to drain it.
+     */
+    private boolean shouldSwallowSystemKey(KeyEvent event) {
+        long now = SystemClock.uptimeMillis();
+        long delay = now - event.getEventTime();
+
+        if (now < mSystemBurstCooldownUntil) {
+            return true;
+        }
+
+        long gap = now - mLastSystemKeyDownTime;
+        boolean hasPrevious = mLastSystemKeyDownTime != 0;
+        mLastSystemKeyDownTime = now;
+
+        if (hasPrevious && delay > BURST_STALE_MS && gap < BURST_GAP_MS) {
+            mSystemBurstCooldownUntil = now + BURST_COOLDOWN_MS;
+            Log.d(TAG, "Lag burst (delay " + delay + "ms) — swallowing system keys");
+            return true;
+        }
+
+        return delay > STALE_MS;
     }
 
     private boolean isSystemKey(int keyCode) {

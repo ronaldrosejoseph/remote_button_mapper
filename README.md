@@ -162,7 +162,6 @@ adb logcat -s ButtonMapperService:D BootReceiver:D MainActivity:D
 ```
 
 Look for:
-- `"Mapping found for key X"` — successful remap
 - `"Service Connected"` — service is alive and bound
 
 ---
@@ -189,9 +188,9 @@ Install directly via:
 
 | Component | Purpose |
 |-----------|---------|
-| `ButtonMapperService` | Accessibility service that intercepts key events, checks mappings, and launches target apps. System keys pass through immediately. No debounce or special handling |
+| `ButtonMapperService` | Accessibility service that intercepts key events, checks mappings, and launches target apps. System keys pass through, except during a detected lag burst when they are briefly swallowed so the focus does not jump several steps |
 | `MainActivity` | UI for adding/modifying/deleting button mappings, stored in device-protected SharedPreferences |
-| `BootReceiver` | Listens for boot-completed broadcasts and sets a flag for service recovery |
+| `BootReceiver` | Listens for `BOOT_COMPLETED` broadcast and launches MainActivity in background for service recovery |
 
 ---
 

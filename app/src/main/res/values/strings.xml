@@ -1,11 +1,8 @@
 <resources>
     <string name="app_name">Remote Button Mapper</string>
     <string name="accessibility_service_description">Allows mapping remote control buttons to launch specific apps.</string>
-    <string name="title_activity_main">Remote Button Mapper</string>
     <string name="add_mapping">Add Mapping</string>
-    <string name="press_button_title">Press a Button</string>
     <string name="press_button_message">Press the button on your remote to map</string>
-    <string name="select_app_title">Select App</string>
     <string name="cancel">Cancel</string>
     <string name="please_enable_accessibility">Please enable the Accessibility Service</string>
     <string name="accessibility_enabled_auto">Accessibility Service enabled automatically!</string>

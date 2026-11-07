@@ -30,15 +30,18 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 public class MainActivity extends AppCompatActivity {
 
     private static final String PREFS_NAME = "ButtonMappings";
     private ListView listMappings;
     private SharedPreferences prefs;
+    private Dialog addMappingDialog;
 
     @SuppressLint("BatteryLife")
     @Override
@@ -58,6 +61,9 @@ public class MainActivity extends AppCompatActivity {
         
         Context directBootContext = createDeviceProtectedStorageContext();
         prefs = directBootContext.getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        SharedPreferences statePrefs = directBootContext.getSharedPreferences("ServiceState", MODE_PRIVATE);
+        statePrefs.edit().putBoolean("is_recording", false).apply();
+
         listMappings = findViewById(R.id.list_mappings);
         Button btnAdd = findViewById(R.id.btn_add_mapping);
 
@@ -69,40 +75,55 @@ public class MainActivity extends AppCompatActivity {
 
         refreshMappings();
 
-        // Request ignore battery optimizations to prevent service kill
-        String packageName = getPackageName();
-        android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
-        if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
-            Intent intent = new Intent();
-            intent.setAction(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-            intent.setData(android.net.Uri.parse("package:" + packageName));
-            startActivity(intent);
-        }
-
-        // Request "Display over other apps" — required on Android 10+ for boot auto-launch
-        if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this,
-                    R.string.enable_overlay_toast,
-                    Toast.LENGTH_LONG).show();
-            try {
-                Intent overlayIntent = new Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        android.net.Uri.parse("package:" + getPackageName()));
-                startActivity(overlayIntent);
-            } catch (android.content.ActivityNotFoundException e) {
-                // Some TVs don't have the per-app overlay settings page
+        long uptimeMs = android.os.SystemClock.elapsedRealtime();
+        boolean isBootPhase = getIntent().getBooleanExtra("from_boot", false) || uptimeMs < 60 * 1000;
+        if (!isBootPhase) {
+            // Request ignore battery optimizations to prevent service kill
+            String packageName = getPackageName();
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
                 try {
-                    startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION));
-                } catch (Exception ex) {
-                    Log.w("MainActivity", "Could not open overlay settings", ex);
+                    Intent intent = new Intent();
+                    intent.setAction(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                    intent.setData(android.net.Uri.parse("package:" + packageName));
+                    startActivity(intent);
+                } catch (android.content.ActivityNotFoundException e) {
+                    // Some TVs don't support the direct ignore-battery-optimizations request dialog
+                    try {
+                        startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+                    } catch (Exception ex) {
+                        Log.w("MainActivity", "Could not open battery optimization settings", ex);
+                    }
                 }
             }
-        }
 
-        // TCL's Safety Guard explicitly launches apps on boot. To catch this automatic 
-        // launch and hide our app's UI seamlessly, we minimize if the device booted within the last 90 seconds.
-        long uptimeMs = android.os.SystemClock.elapsedRealtime();
-        if (getIntent().getBooleanExtra("from_boot", false) || uptimeMs < 90 * 1000) {
+            // Request "Display over other apps" — required on Android 10+ for boot auto-launch
+            if (!Settings.canDrawOverlays(this)) {
+                Toast.makeText(this,
+                        R.string.enable_overlay_toast,
+                        Toast.LENGTH_LONG).show();
+                try {
+                    Intent overlayIntent = new Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            android.net.Uri.parse("package:" + getPackageName()));
+                    startActivity(overlayIntent);
+                } catch (android.content.ActivityNotFoundException e) {
+                    // Some TVs don't have the per-app overlay settings page
+                    try {
+                        startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION));
+                    } catch (Exception ex) {
+                        Log.w("MainActivity", "Could not open overlay settings", ex);
+                    }
+                }
+            }
+
+            // Request notification permission on Android 13+ so the foreground service notification is visible
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 101);
+                }
+            }
+        } else {
             Log.i("MainActivity", "Launched during boot phase (uptime " + uptimeMs + "ms) — moving to back");
             moveTaskToBack(true);
         }
@@ -120,6 +141,22 @@ public class MainActivity extends AppCompatActivity {
         refreshMappings();
         LinearLayout bannerWarning = findViewById(R.id.banner_warning);
         checkAccessibilityBanner(bannerWarning);
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (addMappingDialog != null && addMappingDialog.isShowing()) {
+            addMappingDialog.dismiss();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (addMappingDialog != null && addMappingDialog.isShowing()) {
+            addMappingDialog.dismiss();
+        }
     }
 
     private void showOptionsDialog(MappingItem item) {
@@ -182,7 +219,24 @@ public class MainActivity extends AppCompatActivity {
                     getContentResolver(),
                     Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
 
-            // Step 1: Remove our service to force a fresh rebind
+            // Case 1: Normal disabled case — component not in list.
+            // Enable it immediately without sleeping to avoid being killed mid-toggle.
+            if (TextUtils.isEmpty(enabledServices) || !enabledServices.contains(serviceComponent)) {
+                String newValue = TextUtils.isEmpty(enabledServices) ? serviceComponent : enabledServices + ":" + serviceComponent;
+                Settings.Secure.putString(
+                        getContentResolver(),
+                        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+                        newValue);
+                Settings.Secure.putInt(
+                        getContentResolver(),
+                        Settings.Secure.ACCESSIBILITY_ENABLED,
+                        1);
+                Log.i("MainActivity", "Accessibility service enabled immediately.");
+                return true;
+            }
+
+            // Case 2: Stale binding case — component is present but system does not report it active.
+            // Force rebind by removing, waiting 2s, and re-adding.
             String servicesWithout = removeServiceFromList(enabledServices, serviceComponent);
             Settings.Secure.putString(
                     getContentResolver(),
@@ -236,8 +290,8 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private String removeServiceFromList(String serviceList, String component) {
-        if (TextUtils.isEmpty(serviceList)) {
+    static String removeServiceFromList(String serviceList, String component) {
+        if (serviceList == null || serviceList.isEmpty()) {
             return "";
         }
         StringBuilder result = new StringBuilder();
@@ -272,13 +326,17 @@ public class MainActivity extends AppCompatActivity {
 
     private List<AppItem> getInstalledApps() {
         PackageManager pm = getPackageManager();
-        Intent intent = new Intent(Intent.ACTION_MAIN, null);
-        intent.addCategory(Intent.CATEGORY_LAUNCHER);
-        List<ResolveInfo> apps = pm.queryIntentActivities(intent, 0);
-        
         List<AppItem> appItems = new ArrayList<>();
-        for (ResolveInfo info : apps) {
-             appItems.add(new AppItem(info.loadLabel(pm).toString(), info.activityInfo.packageName));
+        Set<String> seen = new HashSet<>();
+        // TV-only apps such as Prime Video register LEANBACK_LAUNCHER, not LAUNCHER
+        for (String category : new String[]{Intent.CATEGORY_LAUNCHER, Intent.CATEGORY_LEANBACK_LAUNCHER}) {
+            Intent intent = new Intent(Intent.ACTION_MAIN, null);
+            intent.addCategory(category);
+            for (ResolveInfo info : pm.queryIntentActivities(intent, 0)) {
+                if (seen.add(info.activityInfo.packageName)) {
+                    appItems.add(new AppItem(info.loadLabel(pm).toString(), info.activityInfo.packageName));
+                }
+            }
         }
         appItems.sort((o1, o2) -> o1.name.compareToIgnoreCase(o2.name));
         return appItems;
@@ -286,13 +344,13 @@ public class MainActivity extends AppCompatActivity {
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private void showAddMappingDialog() {
-        Dialog dialog = new Dialog(this);
-        dialog.setContentView(R.layout.dialog_add_mapping);
-        Objects.requireNonNull(dialog.getWindow()).setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
+        addMappingDialog = new Dialog(this);
+        addMappingDialog.setContentView(R.layout.dialog_add_mapping);
+        Objects.requireNonNull(addMappingDialog.getWindow()).setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
 
-        TextView textPressedKey = dialog.findViewById(R.id.text_pressed_key);
-        ListView listApps = dialog.findViewById(R.id.list_apps);
-        Button btnCancel = dialog.findViewById(R.id.btn_cancel_dialog);
+        TextView textPressedKey = addMappingDialog.findViewById(R.id.text_pressed_key);
+        ListView listApps = addMappingDialog.findViewById(R.id.list_apps);
+        Button btnCancel = addMappingDialog.findViewById(R.id.btn_cancel_dialog);
 
         final int[] capturedKeyCode = {-1};
 
@@ -312,12 +370,11 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         };
+        android.content.IntentFilter filter = new android.content.IntentFilter("com.example.remotebuttonmapper.ACTION_KEY_CAPTURED");
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(keyReceiver, new android.content.IntentFilter("com.example.remotebuttonmapper.ACTION_KEY_CAPTURED"), null, null, Context.RECEIVER_NOT_EXPORTED);
-        } else if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            registerReceiver(keyReceiver, new android.content.IntentFilter("com.example.remotebuttonmapper.ACTION_KEY_CAPTURED"), null, null, 0);
+            registerReceiver(keyReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
-            registerReceiver(keyReceiver, new android.content.IntentFilter("com.example.remotebuttonmapper.ACTION_KEY_CAPTURED"));
+            registerReceiver(keyReceiver, filter, "com.example.remotebuttonmapper.INTERNAL", null);
         }
 
         // Load Apps
@@ -330,15 +387,15 @@ public class MainActivity extends AppCompatActivity {
                 AppItem selectedApp = appItems.get(position);
                 prefs.edit().putString(String.valueOf(capturedKeyCode[0]), selectedApp.packageName).apply();
                 refreshMappings();
-                dialog.dismiss();
+                addMappingDialog.dismiss();
             } else {
                 Toast.makeText(this, R.string.press_remote_first, Toast.LENGTH_SHORT).show();
             }
         });
 
-        btnCancel.setOnClickListener(v -> dialog.dismiss());
+        btnCancel.setOnClickListener(v -> addMappingDialog.dismiss());
         
-        dialog.setOnDismissListener(d -> {
+        addMappingDialog.setOnDismissListener(d -> {
             // Disable Recording Mode
             statePrefs.edit().putBoolean("is_recording", false).apply();
             try {
@@ -346,9 +403,10 @@ public class MainActivity extends AppCompatActivity {
             } catch (IllegalArgumentException e) {
                 // Ignore if not registered
             }
+            addMappingDialog = null;
         });
 
-        dialog.show();
+        addMappingDialog.show();
     }
 
     // --- Helper Classes ---
